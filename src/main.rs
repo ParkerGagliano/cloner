@@ -4,14 +4,15 @@ use reqwest;
 use reqwest::Error;
 use serde_json::Value;
 use tokio;
+const ORG_PROMPT: &'static str = "Select the organization you want to clone repos from... ARROW KEYS: Next/Prev Page SPACE: Select, ENTER: Confirm";
+const REPO_PROMPT: &'static str = "Select the repos you want to clone... ARROW KEYS: Next/Prev Page SPACE: Select, ENTER: Confirm";
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
-    gh_token: String,
+    gh_token: Option<String>,
 }
-const ORG_PROMPT: &'static str = "Select the organization you want to clone repos from... ARROW KEYS: Next/Prev Page SPACE: Select, ENTER: Confirm";
-const REPO_PROMPT: &'static str = "Select the repos you want to clone... ARROW KEYS: Next/Prev Page SPACE: Select, ENTER: Confirm";
+
 fn retrieve_selection(multi: bool, items: &Vec<String>, prompt: &str) -> Vec<usize> {
     if multi {
         let selection: Vec<usize> = MultiSelect::new()
@@ -40,7 +41,10 @@ async fn fetch(url: &str, token: &str) -> Result<Value, Error> {
         .header("User-Agent", "reqwest")
         .send()
         .await?;
-
+    if !res.status().is_success() {
+        println!("Invalid token");
+        std::process::exit(1);
+    }
     let body = res.bytes().await?; // Get response body as bytes
     let json_response: Value = serde_json::from_slice(&body).unwrap();
     Ok(json_response)
@@ -87,11 +91,31 @@ fn clone_selected_repos(selected_repos: Vec<Value>, gh_token: &str) {
         clone_repo(url, gh_token);
     });
 }
+
+fn token_handler(gh_token: &str) -> String {
+    if gh_token != "" {
+        println!("Writing token to file...");
+        std::fs::write("token.txt", gh_token).expect("Unable to write file");
+        return gh_token.to_owned();
+    } else {
+        let token_file_contents: String;
+        if let Ok(value) = std::fs::read_to_string("token.txt") {
+            token_file_contents = value;
+            token_file_contents
+        } else {
+            println!("No token file or token provided");
+            std::process::exit(1);
+        }
+    }
+}
 #[tokio::main]
 async fn main() -> Result<(), reqwest::Error> {
     let args: Args = Args::parse();
+
+    let gh_token = token_handler(&args.gh_token.unwrap_or("".to_string()));
+
     let body: Vec<Value>;
-    if let Ok(orgs) = fetch_orgs(&args.gh_token).await {
+    if let Ok(orgs) = fetch_orgs(&gh_token).await {
         body = orgs;
     } else {
         println!("Unable to fetch organizations");
@@ -109,7 +133,7 @@ async fn main() -> Result<(), reqwest::Error> {
     let current_repo: String = body[selection[0]]["repos_url"].to_string();
     let repos: Vec<Value>;
     println!("{}", current_repo);
-    if let Ok(repos_ok) = get_repo_links(&current_repo, "?per_page=100", &args.gh_token).await {
+    if let Ok(repos_ok) = get_repo_links(&current_repo, "?per_page=100", &gh_token).await {
         repos = repos_ok //.to_owned();
     } else {
         println!("Invalid token");
@@ -128,8 +152,6 @@ async fn main() -> Result<(), reqwest::Error> {
         .iter()
         .map(|item: &usize| repos[*item].to_owned())
         .collect::<Vec<Value>>();
-    clone_selected_repos(selected_raw_body, &args.gh_token);
+    clone_selected_repos(selected_raw_body, &gh_token);
     Ok(())
 }
-
-//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
