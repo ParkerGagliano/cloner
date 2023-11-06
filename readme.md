@@ -17,7 +17,11 @@ On multiple selections use space to select and enter to confirm.
 - Condition to check if windows and use windows commands instead of sh
 - Improved error handling
 - Pull feature
-- Loading graphic
+- Improve JSON parsing (indexed values have " around them)
 
 
-  
+
+## Done
+- Loading Graphic
+- Threading for cloning
+- Store gh token by default
