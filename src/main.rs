@@ -2,7 +2,6 @@ use clap::Parser;
 use dialoguer::{MultiSelect, Select};
 use reqwest::Error;
 use serde::{de::DeserializeOwned, Deserialize};
-use serde_json::Value;
 use std::thread::{self, JoinHandle};
 
 use reqwest;
@@ -10,14 +9,17 @@ use tokio;
 
 mod loader;
 
-const ORG_PROMPT: &'static str = "Select the organization you want to clone repos from...\n\
+const ORG_PROMPT: &str = "Select the organization you want to clone repos from...\n\
     ← →: Next/Prev Page\n\
     ENTER: Confirm";
 
-const REPO_PROMPT: &'static str = "Select the repos you want to clone...\n\
+const REPO_PROMPT: &str = "Select the repos you want to clone...\n\
     ← →: Prev/Next Page\n\
     SPACE: Select\n\
     ENTER: Confirm";
+
+const GITHUB_ORG_URL: &str = "https://api.github.com/user/orgs";
+const PER_PAGE_PARAM: &str = "?per_page=100";
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -25,11 +27,6 @@ struct Args {
     #[arg(short, long)]
     gh_token: Option<String>,
 }
-#[derive(Deserialize)]
-struct OrgResponse {
-    orgs: Vec<OrgInfo>,
-}
-
 #[derive(Deserialize, Debug)]
 struct OrgInfo {
     repos_url: String,
@@ -61,12 +58,12 @@ fn retrieve_selection(multi: bool, items: &Vec<String>, prompt: &str) -> Vec<usi
     }
 }
 
-async fn fetch<T: DeserializeOwned>(url: &str, token: &str) -> Result<T, Error> {
+async fn fetch<T: DeserializeOwned>(url: &str, token: &str, qparams: &str) -> Result<T, Error> {
     let loader = loader::Loader::new();
     loader.start();
     let client: reqwest::Client = reqwest::Client::new();
     let res: reqwest::Response = client
-        .get(url)
+        .get(url.to_owned() + qparams)
         .header("Authorization", format!("Bearer {}", token))
         .header("User-Agent", "reqwest")
         .send()
@@ -94,19 +91,6 @@ fn clone_repo(repo_url: &str, gh_token: &str) {
         .expect("failed to execute process");
 }
 
-async fn fetch_orgs(token: &str) -> Result<Vec<OrgInfo>, Error> {
-    //Can make this generic
-    let json_response: Vec<OrgInfo> = fetch("https://api.github.com/user/orgs", &token).await?;
-    Ok(json_response)
-}
-
-// async fn get_repo_links(repo_link: &str, qparams: &str, token: &str) -> Result<Vec<Value>, Error> {
-//     let repo_link = repo_link.trim_matches('"').to_owned() + qparams;
-//     let json_response = fetch(&repo_link, &token).await?;
-//     //let array: Vec<Value> = json_response.as_array().unwrap().to_owned();
-//     Ok(array)
-// }
-
 fn clone_selected_repos(selected_repos: Vec<RepoInfo>, gh_token: &str) {
     let mut repo_urls: Vec<String> = Vec::new();
     selected_repos.iter().for_each(|repo: &RepoInfo| {
@@ -133,15 +117,17 @@ fn clone_selected_repos(selected_repos: Vec<RepoInfo>, gh_token: &str) {
 }
 
 fn token_handler(gh_token: &str) -> String {
-    if gh_token != "" && !std::path::Path::new("token.txt").exists() {
-        println!("Writing token to file...");
+    if gh_token != "" {
+        if !std::path::Path::new("token.txt").exists() {
+            println!("Writing token to file...");
+        } else {
+            println!("Overwriting token file...");
+        }
         std::fs::write("token.txt", gh_token).expect("Unable to write file");
         return gh_token.to_owned();
     } else {
-        let token_file_contents: String;
         if let Ok(value) = std::fs::read_to_string("token.txt") {
-            token_file_contents = value;
-            token_file_contents
+            value
         } else {
             println!("No token file or token provided");
             std::process::exit(1);
@@ -152,47 +138,48 @@ fn token_handler(gh_token: &str) -> String {
 async fn main() -> Result<(), reqwest::Error> {
     let args: Args = Args::parse();
 
-    let gh_token = token_handler(&args.gh_token.unwrap_or("".to_string()));
+    let gh_token: String = token_handler(&args.gh_token.unwrap_or("".to_string()));
 
-    let body: Vec<OrgInfo>;
-
-    if let Ok(orgs) = fetch_orgs(&gh_token).await {
-        body = orgs;
-    } else {
-        println!("Unable to fetch organizations");
-        std::process::exit(1);
-    }
-    let selection: Vec<usize> = retrieve_selection(
+    let org_choices: Vec<OrgInfo> = match fetch(GITHUB_ORG_URL, &gh_token, PER_PAGE_PARAM).await {
+        Ok(orgs) => orgs,
+        Err(err) => {
+            eprintln!("Unable to fetch organizations: {}", err);
+            std::process::exit(1);
+        }
+    };
+    let org_selection_indexes: Vec<usize> = retrieve_selection(
         false,
-        &body
+        &org_choices
             .iter()
             .map(|org| org.login.to_string())
             .collect::<Vec<String>>(),
         ORG_PROMPT,
     );
 
-    let current_repo: String = body[selection[0]].repos_url.to_string();
-    let repos: Vec<RepoInfo>;
-    println!("{}", current_repo);
-    if let Ok(repos_ok) = fetch(&current_repo.to_owned(), &gh_token).await {
-        repos = repos_ok //.to_owned();
-    } else {
-        println!("Invalid token");
-        std::process::exit(1);
-    };
+    let org_repos_url: String = org_choices[org_selection_indexes[0]].repos_url.to_string();
+    let repo_choices: Vec<RepoInfo> =
+        match fetch(&org_repos_url.to_owned(), &gh_token, "?per_page=100").await {
+            Ok(repos) => repos,
+            Err(err) => {
+                eprintln!("Unable to fetch repos: {}", err);
+                std::process::exit(1);
+            }
+        };
+
     let selection: Vec<usize> = retrieve_selection(
         true,
-        &repos
+        &repo_choices
             .iter()
             .map(|repo| repo.name.to_string())
             .collect::<Vec<String>>(),
         REPO_PROMPT,
     );
 
-    let selected_raw_body = selection
+    let selected_repos = selection
         .iter()
-        .map(|item: &usize| repos[*item].to_owned())
+        .map(|item: &usize| repo_choices[*item].to_owned())
         .collect::<Vec<RepoInfo>>();
-    clone_selected_repos(selected_raw_body, &gh_token);
+
+    clone_selected_repos(selected_repos, &gh_token);
     Ok(())
 }
