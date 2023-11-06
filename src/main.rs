@@ -2,7 +2,10 @@ use clap::Parser;
 use dialoguer::{MultiSelect, Select};
 use reqwest::Error;
 use serde::{de::DeserializeOwned, Deserialize};
-use std::thread::{self, JoinHandle};
+use std::{
+    str::from_utf8,
+    thread::{self, JoinHandle},
+};
 
 use reqwest;
 use tokio;
@@ -21,13 +24,16 @@ const REPO_PROMPT: &str = "Select the repos you want to clone...\n\
 const GITHUB_ORG_URL: &str = "https://api.github.com/user/orgs";
 const PER_PAGE_PARAM: &str = "?per_page=100";
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
     gh_token: Option<String>,
+
+    #[arg(short, long, default_value = "false")]
+    update: bool,
 }
-#[derive(Deserialize, Debug)]
+#[derive(Parser, Debug, Deserialize)]
 struct OrgInfo {
     repos_url: String,
     login: String,
@@ -48,7 +54,7 @@ fn retrieve_selection(multi: bool, items: &Vec<String>, prompt: &str) -> Vec<usi
         selection
     } else {
         let selection: usize = Select::new()
-            .with_prompt("Select the organization you want to clone repos from... ARROW KEYS: Next/Prev Page SPACE: Select, ENTER: Confirm ")
+            .with_prompt(prompt)
             .items(&items)
             .interact()
             .unwrap();
@@ -72,7 +78,7 @@ async fn fetch<T: DeserializeOwned>(url: &str, token: &str, qparams: &str) -> Re
         println!("Invalid token");
         std::process::exit(1);
     }
-    let body = res.bytes().await?; // Get response body as bytes
+    let body = res.bytes().await?;
     let json_response: T = serde_json::from_slice(&body).unwrap();
     loader.stop();
     Ok(json_response)
@@ -134,9 +140,63 @@ fn token_handler(gh_token: &str) -> String {
         }
     }
 }
+
+fn pull_all_repos() {
+    let _output = std::process::Command::new("ls")
+        .arg("-c")
+        .output()
+        .expect("failed to execute process");
+
+    let all_files: Vec<String> = String::from_utf8(_output.stdout)
+        .unwrap()
+        .split("\n")
+        .map(|s| s.to_string())
+        .collect();
+    let mut handles: Vec<JoinHandle<String>> = Vec::new();
+    println!("{:?}", all_files);
+    for file in all_files[0..all_files.len() - 1]
+        .iter()
+        .filter(|&x| x != &"token.txt" && x != &"cloner")
+    {
+        let file = file.to_owned();
+        let current_thread = thread::spawn(move || {
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("cd {} && git pull", file))
+                .output()
+                .expect("idk fix this");
+            if output.stderr.len() > 0 {
+                return format!(
+                    "Error Pulling: '{}': Shell Output: {}",
+                    file,
+                    from_utf8(&output.stderr).unwrap()
+                );
+            } else {
+                return format!(
+                    "Success Pulling '{}': Shell Output: {}",
+                    file,
+                    from_utf8(&output.stdout).unwrap()
+                );
+            }
+        });
+        handles.push(current_thread);
+    }
+
+    handles
+        .into_iter()
+        .for_each(|handle: JoinHandle<String>| match handle.join() {
+            Ok(value) => println!("{}", value),
+            Err(_) => println!("Thread failed"),
+        });
+}
+
 #[tokio::main]
 async fn main() -> Result<(), reqwest::Error> {
     let args: Args = Args::parse();
+    if args.update {
+        pull_all_repos();
+        std::process::exit(0);
+    }
 
     let gh_token: String = token_handler(&args.gh_token.unwrap_or("".to_string()));
 
