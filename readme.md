@@ -16,9 +16,9 @@ On multiple selections use space to select and enter to confirm.
 ## TODO
 - Condition to check if windows and use windows commands instead of sh
 - Improved error handling
-- Pull feature
 - pass flags to the clone command (--mirror, etc)
 - look into limiting threads in case of large number of repos
+- pull out cmd logic into function
 
 
 ## Done
@@ -26,3 +26,5 @@ On multiple selections use space to select and enter to confirm.
 - Threading for cloning
 - Store gh token by default
 - Improve JSON parsing
+- Pull feature
+  

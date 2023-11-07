@@ -33,7 +33,7 @@ struct Args {
     #[arg(short, long, default_value = "false")]
     update: bool,
 }
-#[derive(Parser, Debug, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct OrgInfo {
     repos_url: String,
     login: String,
@@ -141,22 +141,23 @@ fn token_handler(gh_token: &str) -> String {
     }
 }
 
-fn pull_all_repos() {
-    let _output = std::process::Command::new("ls")
-        .arg("-c")
-        .output()
-        .expect("failed to execute process");
+fn ls_directory() -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+    let paths = std::fs::read_dir("./").unwrap();
+    for path in paths {
+        let path = path.unwrap().path();
+        let path = path.to_str().unwrap();
+        files.push(path.to_string());
+    }
+    files
+}
 
-    let all_files: Vec<String> = String::from_utf8(_output.stdout)
-        .unwrap()
-        .split("\n")
-        .map(|s| s.to_string())
-        .collect();
+fn pull_all_repos() {
+    let all_files: Vec<String> = ls_directory();
     let mut handles: Vec<JoinHandle<String>> = Vec::new();
-    println!("{:?}", all_files);
-    for file in all_files[0..all_files.len() - 1]
+    for file in all_files
         .iter()
-        .filter(|&x| x != &"token.txt" && x != &"cloner")
+        .filter(|&x| x != &"./token.txt" && x != &"./cloner")
     {
         let file = file.to_owned();
         let current_thread = thread::spawn(move || {
@@ -185,7 +186,7 @@ fn pull_all_repos() {
     handles
         .into_iter()
         .for_each(|handle: JoinHandle<String>| match handle.join() {
-            Ok(value) => println!("{}", value),
+            Ok(value) => println!("{}", value), //this will "always return an ok value even if the shell errors"
             Err(_) => println!("Thread failed"),
         });
 }
