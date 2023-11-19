@@ -75,8 +75,8 @@ async fn fetch<T: DeserializeOwned>(url: &str, token: &str, qparams: &str) -> Re
         .send()
         .await?;
     if !res.status().is_success() {
-        println!("Invalid token");
-        std::process::exit(1);
+        eprintln!("Error fetching: {}", res.status());
+        std::process::exit(1); 
     }
     let body = res.bytes().await?;
     let json_response: T = serde_json::from_slice(&body).unwrap();
@@ -122,7 +122,7 @@ fn clone_selected_repos(selected_repos: Vec<RepoInfo>, gh_token: &str) {
         });
 }
 
-fn token_handler(gh_token: &str) -> String {
+fn token_handler(gh_token: &str) -> Result<String, ()> {
     if gh_token != "" {
         if !std::path::Path::new("token.txt").exists() {
             println!("Writing token to file...");
@@ -130,13 +130,12 @@ fn token_handler(gh_token: &str) -> String {
             println!("Overwriting token file...");
         }
         std::fs::write("token.txt", gh_token).expect("Unable to write file");
-        return gh_token.to_owned();
+        return Ok(gh_token.to_owned());
     } else {
         if let Ok(value) = std::fs::read_to_string("token.txt") {
-            value
+            Ok(value)
         } else {
-            println!("No token file or token provided");
-            std::process::exit(1);
+            Err(())
         }
     }
 }
@@ -199,7 +198,13 @@ async fn main() -> Result<(), reqwest::Error> {
         std::process::exit(0);
     }
 
-    let gh_token: String = token_handler(&args.gh_token.unwrap_or("".to_string()));
+    let gh_token = match token_handler(&args.gh_token.unwrap_or("".to_string())) {
+        Ok(token) => token,
+        Err(_) => {
+            println!("No Token Provided or Found");
+            std::process::exit(1);
+        }
+    };
 
     let org_choices: Vec<OrgInfo> = match fetch(GITHUB_ORG_URL, &gh_token, PER_PAGE_PARAM).await {
         Ok(orgs) => orgs,
@@ -208,6 +213,7 @@ async fn main() -> Result<(), reqwest::Error> {
             std::process::exit(1);
         }
     };
+
     let org_selection_indexes: Vec<usize> = retrieve_selection(
         false,
         &org_choices
@@ -242,5 +248,6 @@ async fn main() -> Result<(), reqwest::Error> {
         .collect::<Vec<RepoInfo>>();
 
     clone_selected_repos(selected_repos, &gh_token);
+
     Ok(())
 }
